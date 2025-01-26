@@ -521,6 +521,9 @@ int main(int argc, char *argv[]) {
 
     corel_commit_array_collect(&commits, repository, latest_tag_commit, -1);
     corel_bump_version(&latest_tag->ver, commits, false);
+    char *version_name = corel_ver_tostr(&latest_tag->ver);
+    corel_tag_now(version_name, "HEAD", repository);
+    free(version_name);
     git_strarray_free(&tag_names);
     git_commit_free(latest_tag_commit);
 
