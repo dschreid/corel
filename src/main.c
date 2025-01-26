@@ -340,10 +340,12 @@ char *corel_ver_tostr(corel_ver *version) {
 void corel_ver_bump(corel_ver *version, COREL_RELEASE_BUMP type) {
     switch (type) {
     case MAJOR:
-        version->major += 1;
-        version->minor = 0;
-        version->patch = 0;
-        break;
+        if (version->major > 0) {
+            version->major += 1;
+            version->minor = 0;
+            version->patch = 0;
+            break;
+        }
     case MINOR:
         version->minor += 1;
         version->patch = 0;
