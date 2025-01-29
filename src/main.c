@@ -3,6 +3,7 @@
 #include "git2/remote.h"
 #include "git2/repository.h"
 #include "git2/revwalk.h"
+#include "git2/strarray.h"
 #include "git2/tag.h"
 #include <argp.h>
 #include <bits/stdint-uintn.h>
@@ -258,8 +259,13 @@ int corel_cli_parse_args(int argc, char *argv[], cli_args *args) {
         return 0;                                                                                                                                              \
     }
 
+void char_free(char *unused) {
+    // Strings inside an string_array are unowned
+}
+
 DYNAMIC_ARRAY(corel_commit_array, git_commit);
 DYNAMIC_ARRAY(corel_tag_array, git_tag);
+DYNAMIC_ARRAY(corel_string_array, char);
 
 void corel_commit_array_collect(corel_commit_array **out, git_repository *repository, git_commit *since, u_int64_t max) {
     corel_commit_array_init(out, 1);
@@ -269,7 +275,6 @@ void corel_commit_array_collect(corel_commit_array **out, git_repository *reposi
     git_revwalk_sorting(walk, GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME | GIT_SORT_REVERSE);
 
     if (since) {
-        // git_revwalk_push(walk, git_commit_id(since));
         git_revwalk_push_head(walk);
         git_revwalk_hide(walk, git_commit_id(since));
     } else {
@@ -305,11 +310,14 @@ typedef enum {
 
 COREL_RELEASE_BUMP corel_analyze_commit_message(char *commit_message) {
     if (regexec(&major_regex, commit_message, 0, NULL, 0) == 0) {
+        BOAST_DBG("Commit Message (%s) parsed as MAJOR", commit_message);
         return MAJOR;
     }
     if (regexec(&minor_regex, commit_message, 0, NULL, 0) == 0) {
+        BOAST_DBG("Commit Message (%s) parsed as MINOR", commit_message);
         return MINOR;
     }
+    BOAST_DBG("Commit Message (%s) parsed as PATCH", commit_message);
     return PATCH;
 }
 
@@ -415,6 +423,82 @@ void corel_tag_now(char *tag_name, char *rev, git_repository *repository) {
     git_object_free(target);
 }
 
+void corel_generate_change_log(corel_commit_array *commits) {
+    corel_commit_array *major_commits;
+    corel_commit_array *minor_commits;
+    corel_commit_array *patch_commits;
+
+    corel_commit_array_init(&major_commits, 1);
+    corel_commit_array_init(&minor_commits, 4);
+    corel_commit_array_init(&patch_commits, 8);
+
+    for (size_t i = 0; i < commits->len; i++) {
+        git_commit *commit = commits->entries[i];
+        char *commit_message = git_commit_message(commit);
+
+        COREL_RELEASE_BUMP change = corel_analyze_commit_message(commit_message);
+
+        switch (change) {
+        case MAJOR:
+            corel_commit_array_push(major_commits, commit);
+            break;
+        case MINOR:
+            corel_commit_array_push(minor_commits, commit);
+            break;
+        case PATCH:
+            corel_commit_array_push(patch_commits, commit);
+            break;
+        case NONE:
+            break;
+        }
+    }
+
+    corel_string_array *changelog;
+    corel_string_array_init(&changelog, 10);
+
+#define APPEND_CHANGELOG(arr, header)                                                                                                                          \
+    if (arr->len > 1) {                                                                                                                                        \
+        corel_string_array_push(changelog, header);                                                                                                            \
+                                                                                                                                                               \
+        for (size_t i = 0; i < arr->len; i++) {                                                                                                                \
+            git_commit *commit = arr->entries[i];                                                                                                              \
+            char *message = git_commit_summary(commit);                                                                                                        \
+            git_oid *id = git_commit_id(commit);                                                                                                               \
+            corel_string_array_push(changelog, " - ");                                                                                                         \
+            corel_string_array_push(changelog, message);                                                                                                       \
+            corel_string_array_push(changelog, " ( ");                                                                                                         \
+            corel_string_array_push(changelog, git_oid_tostr_s(id));                                                                                           \
+            corel_string_array_push(changelog, " ) ");                                                                                                         \
+            corel_string_array_push(changelog, "\n");                                                                                                          \
+        }                                                                                                                                                      \
+    }
+
+    corel_string_array_push(changelog, "# What's Changed\n");
+    bool split_changes_by_convention = false;
+
+    if (split_changes_by_convention) {
+        APPEND_CHANGELOG(major_commits, "## BREAKING CHANGES\n");
+        APPEND_CHANGELOG(minor_commits, "## FEATURES\n");
+        APPEND_CHANGELOG(patch_commits, "## BUG FIXES\n");
+    } else {
+        APPEND_CHANGELOG(commits, "");
+    }
+
+#ifdef DEBUG
+    for (size_t i = 0; i < changelog->len; i++) {
+        char *line = changelog->entries[i];
+
+        printf("%s", line);
+    }
+#endif
+
+    corel_commit_array_free(major_commits);
+    corel_commit_array_free(minor_commits);
+    corel_commit_array_free(patch_commits);
+
+    corel_string_array_free(changelog);
+}
+
 void corel_try_auto_init(git_repository *repository) {
     if (!args.auto_init_tag) {
         BOAST("No tags have been created yet and --auto-init-tag was not provided.");
@@ -438,6 +522,7 @@ void corel_try_auto_init(git_repository *repository) {
         free(version_name);
     }
 
+    corel_generate_change_log(commits);
     corel_commit_array_free(commits);
     corel_taginfo_free(version);
 }
@@ -524,6 +609,8 @@ int main(int argc, char *argv[]) {
     char *version_name = corel_ver_tostr(&latest_tag->ver);
     corel_tag_now(version_name, "HEAD", repository);
     free(version_name);
+
+    corel_generate_change_log(commits);
     git_strarray_free(&tag_names);
     git_commit_free(latest_tag_commit);
 
