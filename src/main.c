@@ -542,11 +542,22 @@ int main(int argc, char *argv[]) {
     corel_commit_array_collect(&commits, repository, latest_tag_commit, -1);
     corel_bump_version(&latest_tag->ver, commits, false);
     char *version_name = corel_ver_tostr(&latest_tag->ver);
+
     if (args.print_version) {
         printf("%s\n", version_name);
-    } else if (!args.dry_run) {
+        goto cleanup_post_tag;
+    }
+    if (commits->len == 0) {
+        BOAST("No new commits have been made since the last tag");
+        goto cleanup_post_tag;
+    }
+    if (args.dry_run) {
+        BOAST("[DRY RUN] Creating tag %s", version_name);
+    } else {
         corel_tag_now(version_name, "HEAD", repository);
     }
+
+cleanup_post_tag:
     free(version_name);
     git_strarray_free(&tag_names);
     git_commit_free(latest_tag_commit);
