@@ -16,7 +16,19 @@
 #include <sys/param.h>
 #include <sys/types.h>
 
-#define DEBUG 1
+// ERRORS
+typedef enum {
+    ERR_PARSE_ARGS = 5,
+    ERR_NO_REPOSITORY = 10,
+    ERR_LATEST_TAG_NOT_FOUND = 30,
+    ERR_TAG_NOT_CREATED = 40,
+    ERR_NO_TAGS_NO_AUTO_INIT = 50,
+    ERR_INVALID_INIT_TAG = 60,
+    ERR_NO_COMMITS = 70,
+} corel_error;
+
+static corel_error corel_last_error = 0;
+#define ERROR(err) corel_last_error = err;
 
 #define BOAST(...)                                                                                                                                             \
     if (!args.quiet) {                                                                                                                                         \
@@ -31,8 +43,10 @@
 
 #ifdef DEBUG
 #define BOAST_DBG(...)                                                                                                                                         \
-    printf("DEBUG: ");                                                                                                                                         \
-    BOAST(__VA_ARGS__)
+    if (!args.quiet) {                                                                                                                                         \
+        printf("DEBUG: ");                                                                                                                                     \
+        BOAST(__VA_ARGS__);                                                                                                                                    \
+    }
 #else
 #define BOAST_DBG(...)
 #endif
@@ -410,6 +424,7 @@ void corel_tag_now(char *tag_name, char *rev, git_repository *repository) {
         //     BOAST("Pushed tag to origin");
         // }
     } else {
+        ERROR(ERR_TAG_NOT_CREATED)
         BOAST_ERR("Failed to create tag %s", tag_name);
     }
     git_object_free(target);
@@ -417,6 +432,7 @@ void corel_tag_now(char *tag_name, char *rev, git_repository *repository) {
 
 void corel_try_auto_init(git_repository *repository) {
     if (!args.auto_init_tag) {
+        ERROR(ERR_NO_TAGS_NO_AUTO_INIT)
         BOAST("No tags have been created yet and --auto-init-tag was not provided.");
         return;
     }
@@ -424,6 +440,7 @@ void corel_try_auto_init(git_repository *repository) {
     BOAST("No tags have been created yet. Figuring out initial version, starting from %s", args.init_version);
     corel_taginfo *version = corel_taginfo_parse(args.init_version);
     if (!version) {
+        ERROR(ERR_INVALID_INIT_TAG)
         BOAST_ERR("Could not parse initial version %s", args.init_version);
         return;
     }
@@ -456,11 +473,11 @@ int main(int argc, char *argv[]) {
 
     if (corel_cli_parse_args(argc, argv, &args) != 0) {
         printf("Could not parse args\n");
-        return 1;
+        return ERR_PARSE_ARGS;
     }
 
     git_libgit2_init();
-    BOAST("Corel v0.0.1");
+    BOAST("Corel v0.0.1"); // TODO: Replace with actual version
 
     git_repository *repository = NULL;
     corel_commit_array *commits = NULL;
@@ -468,13 +485,15 @@ int main(int argc, char *argv[]) {
     git_repository_open(&repository, args.repo_path);
 
     if (!repository) {
+        ERROR(ERR_NO_REPOSITORY)
         BOAST_ERR("Provided path is not a git repository");
-        return 1;
+        return ERR_NO_REPOSITORY;
     }
 
     // Fast Lookup to see if we have any commits
     corel_commit_array_collect(&commits, repository, GIT_COMMIT_HEAD, 1);
     if (commits->len == 0) {
+        ERROR(ERR_NO_COMMITS)
         BOAST_ERR("You have not made any commits yet. Why even run this?")
         goto cleanup;
     }
@@ -512,6 +531,7 @@ int main(int argc, char *argv[]) {
 
     git_commit *latest_tag_commit;
     if (corel_taginfo_commit(&latest_tag_commit, latest_tag, repository) != 0) {
+        ERROR(ERR_LATEST_TAG_NOT_FOUND);
         BOAST_ERR("Failed to lookup commit for the latest tag. This should not happen!");
         git_strarray_free(&tag_names);
         goto cleanup;
@@ -522,7 +542,11 @@ int main(int argc, char *argv[]) {
     corel_commit_array_collect(&commits, repository, latest_tag_commit, -1);
     corel_bump_version(&latest_tag->ver, commits, false);
     char *version_name = corel_ver_tostr(&latest_tag->ver);
-    corel_tag_now(version_name, "HEAD", repository);
+    if (args.print_version) {
+        printf("%s\n", version_name);
+    } else if (!args.dry_run) {
+        corel_tag_now(version_name, "HEAD", repository);
+    }
     free(version_name);
     git_strarray_free(&tag_names);
     git_commit_free(latest_tag_commit);
@@ -540,5 +564,5 @@ cleanup:
     }
     git_libgit2_shutdown();
     BOAST("Bye o/");
-    return 0;
+    return corel_last_error;
 }

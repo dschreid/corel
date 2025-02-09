@@ -16,6 +16,10 @@ if("${CMAKE_BUILD_TYPE}" STREQUAL "Release")
     # string(REPLACE "-fsanitize=address" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 endif()
 
+if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+  add_compile_definitions(DEBUG=1)
+endif()
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SSH2 REQUIRED IMPORTED_TARGET libssh2 openssl libssl libcrypto zlib libpcre)
 
